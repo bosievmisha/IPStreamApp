@@ -78,59 +78,15 @@ namespace IPStreamApp
 
         private void SaveFrameAsBmp(Mat frame)
         {
-            string filePath = $"frame_{DateTime.Now:yyyyMMdd_HHmmss}.bmp";
+            string folderName = "savedframes";
+            string filePath = Path.Combine(folderName, $"frame_{DateTime.Now:yyyyMMdd_HHmmss}.bmp");
+
+            if (!Directory.Exists(folderName))
+            {
+                Directory.CreateDirectory(folderName);
+            }
+
             frame.SaveImage(filePath);
-        }
-    }
-
-    public static class BitmapHelper
-    {
-        public static Bitmap ToAvaloniaBitmap(Mat mat)
-        {
-            using var ms = new MemoryStream();
-            mat.ToMemoryStream(".bmp").CopyTo(ms);
-            ms.Position = 0;
-
-            return new Bitmap(ms);
-        }
-    }
-
-    public class SimpleMessageBox : Avalonia.Controls.Window
-    {
-        public SimpleMessageBox(string message)
-        {
-            var textBlock = new TextBlock
-            {
-                Text = message,
-                Margin = new Thickness(10)
-            };
-
-            var button = new Button
-            {
-                Content = "OK",
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(10)
-            };
-
-            button.Click += (sender, e) => Close();
-
-            var stackPanel = new StackPanel();
-            stackPanel.Children.Add(textBlock);
-            stackPanel.Children.Add(button);
-
-            Content = stackPanel;
-        }
-
-        public static void Show(Avalonia.Controls.Window owner, string message)
-        {
-            var messageBox = new SimpleMessageBox(message)
-            {
-                Width = 300,
-                Height = 150,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner
-            };
-
-            messageBox.ShowDialog(owner);
         }
     }
 }
