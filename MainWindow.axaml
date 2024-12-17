@@ -1,0 +1,13 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="IPStreamApp.MainWindow"
+        Width="800" Height="600">
+	<StackPanel Orientation="Vertical" HorizontalAlignment="Center">
+		<TextBox x:Name="UrlTextBox" Width="200" Height="30" Watermark="Введите URL" />
+		<Button Content="Подключиться" Click="OnConnectClick"/>
+		<Button Content="Отключиться" Click="OnDisconnectClick"/>
+		<Button Content="Сохранить кадр" Click="OnCaptureFrameClick"/>
+		<Image x:Name="VideoDisplay" Width="640" Height="480"/>
+	</StackPanel>
+
+</Window>
