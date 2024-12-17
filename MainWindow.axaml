@@ -1,13 +1,58 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="IPStreamApp.MainWindow"
-        Width="800" Height="600">
-	<StackPanel Orientation="Vertical" HorizontalAlignment="Center">
-		<TextBox x:Name="UrlTextBox" Width="200" Height="30" Watermark="Введите URL" />
-		<Button Content="Подключиться" Click="OnConnectClick"/>
-		<Button Content="Отключиться" Click="OnDisconnectClick"/>
-		<Button Content="Сохранить кадр" Click="OnCaptureFrameClick"/>
-		<Image x:Name="VideoDisplay" Width="640" Height="480"/>
-	</StackPanel>
+        Title="IP Stream App"
+        Width="800" Height="600"
+        MinWidth="400" MinHeight="300"
+        Background="{DynamicResource SystemAccentColor}"
+        FontFamily="Segoe UI, sans-serif">
 
+	<Grid RowDefinitions="Auto, *, Auto" Margin="20">
+
+		<!-- Ввод URL и кнопки управления -->
+		<StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center">
+			<TextBox x:Name="UrlTextBox"
+                     Width="300"
+                     Watermark="Введите URL"
+                     CornerRadius="5"
+                     Padding="5"
+                     BorderBrush="{DynamicResource SystemControlForegroundBaseMediumHighBrush}"
+                     BorderThickness="1"/>
+			<Button Content="Подключиться"
+                    Click="OnConnectClick"
+                    CornerRadius="5"
+                    Padding="10,5"
+                    Background="{DynamicResource SystemControlBackgroundAccentBrush}"
+                    Foreground="White"/>
+			<Button Content="Отключиться"
+                    Click="OnDisconnectClick"
+                    CornerRadius="5"
+                    Padding="10,5"
+                    Background="{DynamicResource SystemControlBackgroundAccentBrush}"
+                    Foreground="White"/>
+		</StackPanel>
+
+		<!-- Отображение видео -->
+		<Border Grid.Row="1"
+                Margin="0, 20"
+                BorderBrush="Gray"
+                BorderThickness="1"
+                CornerRadius="5">
+			<Image x:Name="VideoDisplay"
+                   Stretch="Uniform"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"/>
+		</Border>
+
+		<!-- Кнопка сохранения кадра -->
+		<Button Grid.Row="2"
+                Content="Сохранить кадр"
+                Click="OnCaptureFrameClick"
+                HorizontalAlignment="Center"
+                CornerRadius="5"
+                Padding="10,5"
+                Background="{DynamicResource SystemControlBackgroundAccentBrush}"
+                Foreground="White"/>
+	</Grid>
 </Window>
+
