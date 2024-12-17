@@ -19,18 +19,27 @@ namespace IPStreamApp
         public MainWindow()
         {
             InitializeComponent();
+            // Изначально делаем кнопку "Отключиться" неактивной
+            DisconnectButton.IsEnabled = false;
+            CaptureFrameButton.IsEnabled = false;
         }
 
         private async void OnConnectClick(object? sender, RoutedEventArgs e)
         {
             var url = UrlTextBox.Text;
             if (string.IsNullOrWhiteSpace(url))
+            {
+                SimpleMessageBox.Show(this, "Пожалуйста, введите URL.");
                 return;
+            }
 
             _capture = new VideoCapture(url);
             if (_capture.IsOpened())
             {
                 _isStreaming = true;
+                ConnectButton.IsEnabled = false;
+                DisconnectButton.IsEnabled = true;
+                CaptureFrameButton.IsEnabled = true;
                 await UpdateFrameAsync();
             }
             else
@@ -43,6 +52,14 @@ namespace IPStreamApp
         {
             _isStreaming = false;
             _capture?.Release();
+            _capture = null;
+
+            // Очистка изображения
+            VideoDisplay.Source = null;
+
+            ConnectButton.IsEnabled = true;
+            DisconnectButton.IsEnabled = false;
+            CaptureFrameButton.IsEnabled = false;
         }
 
         private async Task UpdateFrameAsync()
@@ -57,7 +74,7 @@ namespace IPStreamApp
                     VideoDisplay.Source = BitmapHelper.ToAvaloniaBitmap(frame);
                 }
 
-                await Task.Delay(42); // Задержка между кадрами.
+                await Task.Delay(42); // Задержка между кадрами (примерно 24 кадра в секунду).
             }
         }
 
