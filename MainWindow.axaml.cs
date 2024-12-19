@@ -9,6 +9,8 @@ using Avalonia.Layout;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using OpenCvSharp;
+using NAudio.Wave;
+using NAudio;
 
 namespace IPStreamApp
 {
@@ -17,6 +19,8 @@ namespace IPStreamApp
         private VideoCapture? _capture;
         private bool _isStreaming = false;
         private WriteableBitmap? _bitmap;
+        private WaveInEvent? _waveIn;
+        private WaveFileWriter? _waveFileWriter; 
 
         public MainWindow()
         {
@@ -24,10 +28,18 @@ namespace IPStreamApp
             DisconnectButton.IsEnabled = false;
             CaptureFrameButton.IsEnabled = false;
         }
+        private void OnDataAvailable(object sender, WaveInEventArgs e)
+        {
+            if (_isStreaming && _waveFileWriter != null)
+            {
+                _waveFileWriter.Write(e.Buffer, 0, e.BytesRecorded);
+            }
+        }
 
         private async void OnConnectClick(object? sender, RoutedEventArgs e)
         {
             var url = UrlTextBox.Text;
+
             if (string.IsNullOrWhiteSpace(url))
             {
                 SimpleMessageBox.Show(this, "Пожалуйста, введите URL.");
@@ -35,12 +47,25 @@ namespace IPStreamApp
             }
 
             _capture = new VideoCapture(url);
+
             if (_capture.IsOpened())
             {
                 _isStreaming = true;
                 ConnectButton.IsEnabled = false;
                 DisconnectButton.IsEnabled = true;
                 CaptureFrameButton.IsEnabled = true;
+
+                // Настройка захвата аудио
+                _waveIn = new WaveInEvent();
+                _waveIn.DataAvailable += OnDataAvailable;
+
+                string audioFilePath = Path.Combine("savedframes", $"audio_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
+                Directory.CreateDirectory("savedframes"); // Создаём директорию при необходимости
+
+                _waveFileWriter = new WaveFileWriter(audioFilePath, _waveIn.WaveFormat);
+
+                _waveIn.StartRecording();
+
                 await UpdateFrameAsync();
             }
             else
@@ -48,15 +73,32 @@ namespace IPStreamApp
                 SimpleMessageBox.Show(this, "Не удалось подключиться к камере.");
             }
         }
+        private void StopRecordingAudio()
+        {
+            if (_waveIn != null && _waveFileWriter != null)
+            {
+                _waveIn.StopRecording();
+                _waveFileWriter.Dispose();
+                _waveFileWriter.Close();
+
+                _waveIn.Dispose();
+
+                SimpleMessageBox.Show(this, "Аудио успешно сохранено.");
+
+                _waveIn = null;
+                _waveFileWriter = null;
+            }
+        }
 
         private void OnDisconnectClick(object? sender, RoutedEventArgs e)
         {
             _isStreaming = false;
+            StopRecordingAudio(); // Останавливаем запись аудио
+
             _capture?.Release();
             _capture = null;
 
             VideoDisplay.Source = null;
-            _bitmap = null;
 
             ConnectButton.IsEnabled = true;
             DisconnectButton.IsEnabled = false;
