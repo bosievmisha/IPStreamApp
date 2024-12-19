@@ -21,5 +21,6 @@
     </PackageReference>
     <PackageReference Include="OpenCvSharp4" Version="4.10.0.20241108" />
     <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.10.0.20241108" />
+    <PackageReference Include="OpenCvSharp4_.runtime.ubuntu.20.04-x64" Version="4.10.0.20240616" />
   </ItemGroup>
 </Project>

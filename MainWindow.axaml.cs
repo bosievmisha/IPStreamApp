@@ -1,12 +1,13 @@
 using System;
 using System.IO;
-using System.Reflection.Metadata;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using OpenCvSharp;
 
 namespace IPStreamApp
@@ -15,11 +16,11 @@ namespace IPStreamApp
     {
         private VideoCapture? _capture;
         private bool _isStreaming = false;
+        private WriteableBitmap? _bitmap;
 
         public MainWindow()
         {
             InitializeComponent();
-            // Изначально делаем кнопку "Отключиться" неактивной
             DisconnectButton.IsEnabled = false;
             CaptureFrameButton.IsEnabled = false;
         }
@@ -54,8 +55,8 @@ namespace IPStreamApp
             _capture?.Release();
             _capture = null;
 
-            // Очистка изображения
             VideoDisplay.Source = null;
+            _bitmap = null;
 
             ConnectButton.IsEnabled = true;
             DisconnectButton.IsEnabled = false;
@@ -71,10 +72,11 @@ namespace IPStreamApp
 
                 if (!frame.Empty())
                 {
-                    VideoDisplay.Source = BitmapHelper.ToAvaloniaBitmap(frame);
+                    UpdateBitmap(frame);
+                    VideoDisplay.InvalidateVisual();
                 }
 
-                await Task.Delay(42); // Задержка между кадрами (примерно 24 кадра в секунду).
+                await Task.Delay(42);
             }
         }
 
@@ -105,5 +107,71 @@ namespace IPStreamApp
 
             frame.SaveImage(filePath);
         }
+
+        private void UpdateBitmap(Mat frame)
+        {
+            if (frame.Type() != MatType.CV_8UC3 && frame.Type() != MatType.CV_8UC4)
+            {
+                throw new ArgumentException("Mat must be of type CV_8UC3 or CV_8UC4");
+            }
+
+            int width = frame.Width;
+            int height = frame.Height;
+            int bytesPerPixel = frame.Type() == MatType.CV_8UC3 ? 3 : 4;
+            int stride = width * 4; 
+
+            if (_bitmap == null || _bitmap.PixelSize.Width != width || _bitmap.PixelSize.Height != height)
+            {
+                _bitmap = new WriteableBitmap(
+                    new PixelSize(width, height),
+                    new Vector(96, 96),
+                    PixelFormat.Bgra8888, 
+                    AlphaFormat.Premul);
+                VideoDisplay.Source = _bitmap;
+            }
+
+            using (var lockedBitmap = _bitmap.Lock())
+            {
+                IntPtr srcPtr = frame.Data;
+                IntPtr dstPtr = lockedBitmap.Address;
+
+                if (bytesPerPixel == 3)
+                {
+                    int rowBytes = width * bytesPerPixel;
+                    byte[] managedArray = new byte[rowBytes];
+                    for (int y = 0; y < height; y++)
+                    {
+                        Marshal.Copy(srcPtr, managedArray, 0, rowBytes);
+
+                        int index = 0;
+                        for (int x = 0; x < width; x++)
+                        {
+                            Marshal.WriteByte(dstPtr, index + 0, managedArray[x * 3 + 0]); // B
+                            Marshal.WriteByte(dstPtr, index + 1, managedArray[x * 3 + 1]); // G
+                            Marshal.WriteByte(dstPtr, index + 2, managedArray[x * 3 + 2]); // R
+                            Marshal.WriteByte(dstPtr, index + 3, 255);                    // A
+                            index += 4;
+                        }
+
+                        srcPtr += rowBytes;
+                        dstPtr += lockedBitmap.RowBytes;
+                    }
+                }
+                else
+                {
+                    int imageSize = (int)(lockedBitmap.RowBytes * height);
+                    byte[] managedArray = new byte[imageSize];
+
+                    Marshal.Copy(srcPtr, managedArray, 0, imageSize);
+                    Marshal.Copy(managedArray, 0, dstPtr, imageSize);
+                }
+            }
+        }
     }
 }
+
+
+
+
+
+
