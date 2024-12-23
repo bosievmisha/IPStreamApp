@@ -3,10 +3,14 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Threading;
 using OpenCvSharp;
+using NAudio.Wave;
+using NAudio.CoreAudioApi;
 
 namespace IPStreamApp
 {
@@ -15,6 +19,9 @@ namespace IPStreamApp
         private VideoCapture? _capture;
         private bool _isStreaming = false;
         private WriteableBitmap? _bitmap;
+        private WasapiLoopbackCapture? _captureAudio; // Windows
+        private WaveOutEvent? _waveOut; // Windows and Linux
+        private WaveInEvent? _waveIn; // Linux
 
         public MainWindow()
         {
@@ -33,12 +40,16 @@ namespace IPStreamApp
             }
 
             _capture = new VideoCapture(url);
-            if (_capture.IsOpened())
+
+            if (_capture.Open(url))
             {
                 _isStreaming = true;
                 ConnectButton.IsEnabled = false;
                 DisconnectButton.IsEnabled = true;
                 CaptureFrameButton.IsEnabled = true;
+
+                InitializeAudioCapture();
+
                 await UpdateFrameAsync();
             }
             else
@@ -50,6 +61,9 @@ namespace IPStreamApp
         private void OnDisconnectClick(object? sender, RoutedEventArgs e)
         {
             _isStreaming = false;
+
+            StopAudioCapture();
+
             _capture?.Release();
             _capture = null;
 
@@ -63,17 +77,17 @@ namespace IPStreamApp
 
         private async Task UpdateFrameAsync()
         {
+            using var frame = new Mat();
             while (_isStreaming && _capture != null && _capture.IsOpened())
             {
-                using var frame = new Mat();
-                _capture.Read(frame);
-
-                if (!frame.Empty())
+                if (_capture.Read(frame) && !frame.Empty())
                 {
-                    UpdateBitmap(frame);
-                    VideoDisplay.InvalidateVisual();
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        UpdateBitmap(frame);
+                        VideoDisplay.InvalidateVisual();
+                    });
                 }
-
                 await Task.Delay(42);
             }
         }
@@ -116,7 +130,7 @@ namespace IPStreamApp
             int width = frame.Width;
             int height = frame.Height;
             int bytesPerPixel = frame.Type() == MatType.CV_8UC3 ? 3 : 4;
-            int stride = width * 4;
+            int stride = width * 4; 
 
             if (_bitmap == null || _bitmap.PixelSize.Width != width || _bitmap.PixelSize.Height != height)
             {
@@ -135,8 +149,9 @@ namespace IPStreamApp
 
                 if (bytesPerPixel == 3)
                 {
-                    int rowBytes = width * bytesPerPixel;
+                    int rowBytes = width * bytesPerPixel; 
                     byte[] managedArray = new byte[rowBytes];
+
                     for (int y = 0; y < height; y++)
                     {
                         Marshal.Copy(srcPtr, managedArray, 0, rowBytes);
@@ -147,26 +162,105 @@ namespace IPStreamApp
                             Marshal.WriteByte(dstPtr, index + 0, managedArray[x * 3 + 0]); // B
                             Marshal.WriteByte(dstPtr, index + 1, managedArray[x * 3 + 1]); // G
                             Marshal.WriteByte(dstPtr, index + 2, managedArray[x * 3 + 2]); // R
-                            Marshal.WriteByte(dstPtr, index + 3, 255);                    // A
+                            Marshal.WriteByte(dstPtr, index + 3, 255); // A
                             index += 4;
                         }
-
                         srcPtr += rowBytes;
                         dstPtr += lockedBitmap.RowBytes;
                     }
                 }
                 else
                 {
-                    int imageSize = (int)(lockedBitmap.RowBytes * height);
+                    int imageSize = width * height * bytesPerPixel;
                     byte[] managedArray = new byte[imageSize];
 
                     Marshal.Copy(srcPtr, managedArray, 0, imageSize);
-                    Marshal.Copy(managedArray, 0, dstPtr, imageSize);
+
+                    for (int i = 0; i < imageSize; i += bytesPerPixel)
+                    {
+                        Marshal.WriteByte(dstPtr, i / bytesPerPixel * 4 + 0, managedArray[i + 0]); // B
+                        Marshal.WriteByte(dstPtr, i / bytesPerPixel * 4 + 1, managedArray[i + 1]); // G
+                        Marshal.WriteByte(dstPtr, i / bytesPerPixel * 4 + 2, managedArray[i + 2]); // R
+
+                        if (bytesPerPixel == 4)
+                        {
+                            Marshal.WriteByte(dstPtr, i / bytesPerPixel * 4 + 3, managedArray[i + 3]); // A
+                        }
+                        else
+                        {
+                            Marshal.WriteByte(dstPtr, i / bytesPerPixel * 4 + 3, 255); // A
+                        }
+                    }
                 }
+            }
+        }
+
+
+        private void InitializeAudioCapture()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                _captureAudio = new WasapiLoopbackCapture();
+                _waveOut = new WaveOutEvent();
+                var waveProvider = new BufferedWaveProvider(_captureAudio.WaveFormat);
+                _waveOut.Init(waveProvider);
+
+                _captureAudio.DataAvailable += (s, e) =>
+                {
+                    waveProvider.AddSamples(e.Buffer, 0, e.BytesRecorded);
+                };
+
+                _captureAudio.StartRecording();
+                _waveOut.Play();
+            }
+            else
+            {
+                _waveIn = new WaveInEvent();
+                _waveIn.DeviceNumber = -1; // ”стройство по умолчанию
+                _waveIn.WaveFormat = new WaveFormat(44100, 16, 2); // 44.1 к√ц, 16 бит, стерео
+
+                var bufferedWaveProvider = new BufferedWaveProvider(_waveIn.WaveFormat);
+
+                _waveIn.DataAvailable += (s, e) =>
+                {
+                    bufferedWaveProvider.AddSamples(e.Buffer, 0, e.BytesRecorded);
+                };
+
+                _waveOut = new WaveOutEvent();
+                _waveOut.Init(bufferedWaveProvider);
+
+                _waveIn.StartRecording();
+                _waveOut.Play();
+            }
+        }
+
+        private void StopAudioCapture()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                _waveOut?.Stop();
+                _waveOut?.Dispose();
+                _waveOut = null;
+
+                _captureAudio?.StopRecording();
+                _captureAudio?.Dispose();
+                _captureAudio = null;
+            }
+            else
+            {
+                _waveOut?.Stop();
+                _waveOut?.Dispose();
+                _waveOut = null;
+
+                _waveIn?.StopRecording();
+                _waveIn?.Dispose();
+                _waveIn = null;
             }
         }
     }
 }
+
+
 
 
 
