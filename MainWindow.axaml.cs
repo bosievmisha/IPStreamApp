@@ -11,6 +11,7 @@ using Avalonia.Threading;
 using OpenCvSharp;
 using NAudio.Wave;
 using NAudio.CoreAudioApi;
+using ManagedBass;
 
 namespace IPStreamApp
 {
@@ -19,9 +20,13 @@ namespace IPStreamApp
         private VideoCapture? _capture;
         private bool _isStreaming = false;
         private WriteableBitmap? _bitmap;
-        private WasapiLoopbackCapture? _captureAudio; // Windows
-        private WaveOutEvent? _waveOut; // Windows and Linux
-        private WaveInEvent? _waveIn; // Linux
+#if WINDOWS
+        private WasapiLoopbackCapture? _captureAudio;
+        private WaveOutEvent? _waveOut;
+#else
+        private WaveInEvent? _waveIn;
+        private int _streamHandle;
+#endif
 
         public MainWindow()
         {
@@ -130,7 +135,7 @@ namespace IPStreamApp
             int width = frame.Width;
             int height = frame.Height;
             int bytesPerPixel = frame.Type() == MatType.CV_8UC3 ? 3 : 4;
-            int stride = width * 4; 
+            int stride = width * 4;
 
             if (_bitmap == null || _bitmap.PixelSize.Width != width || _bitmap.PixelSize.Height != height)
             {
@@ -149,47 +154,40 @@ namespace IPStreamApp
 
                 if (bytesPerPixel == 3)
                 {
-                    int rowBytes = width * bytesPerPixel; 
-                    byte[] managedArray = new byte[rowBytes];
-
+                    byte[] managedArray = new byte[height * stride];
                     for (int y = 0; y < height; y++)
                     {
-                        Marshal.Copy(srcPtr, managedArray, 0, rowBytes);
-
-                        int index = 0;
                         for (int x = 0; x < width; x++)
                         {
-                            Marshal.WriteByte(dstPtr, index + 0, managedArray[x * 3 + 0]); // B
-                            Marshal.WriteByte(dstPtr, index + 1, managedArray[x * 3 + 1]); // G
-                            Marshal.WriteByte(dstPtr, index + 2, managedArray[x * 3 + 2]); // R
-                            Marshal.WriteByte(dstPtr, index + 3, 255); // A
-                            index += 4;
+                            int srcIndex = y * width * bytesPerPixel + x * bytesPerPixel;
+                            int dstIndex = y * stride + x * 4;
+
+                            Marshal.Copy(srcPtr + srcIndex, managedArray, dstIndex, 3); //  опируем BGR
+                            managedArray[dstIndex + 3] = 255; // ”станавливаем альфа-канал
                         }
-                        srcPtr += rowBytes;
-                        dstPtr += lockedBitmap.RowBytes;
                     }
+                    Marshal.Copy(managedArray, 0, dstPtr, managedArray.Length);
                 }
                 else
                 {
                     int imageSize = width * height * bytesPerPixel;
                     byte[] managedArray = new byte[imageSize];
-
                     Marshal.Copy(srcPtr, managedArray, 0, imageSize);
 
-                    for (int i = 0; i < imageSize; i += bytesPerPixel)
+                    if (frame.Type() == MatType.CV_8UC4)
                     {
-                        Marshal.WriteByte(dstPtr, i / bytesPerPixel * 4 + 0, managedArray[i + 0]); // B
-                        Marshal.WriteByte(dstPtr, i / bytesPerPixel * 4 + 1, managedArray[i + 1]); // G
-                        Marshal.WriteByte(dstPtr, i / bytesPerPixel * 4 + 2, managedArray[i + 2]); // R
-
-                        if (bytesPerPixel == 4)
+                        Marshal.Copy(managedArray, 0, dstPtr, imageSize);
+                    }
+                    else
+                    {
+                        for (int i = 0; i < imageSize; i += 4)
                         {
-                            Marshal.WriteByte(dstPtr, i / bytesPerPixel * 4 + 3, managedArray[i + 3]); // A
+                            byte temp = managedArray[i];
+                            managedArray[i] = managedArray[i + 2];
+                            managedArray[i + 2] = temp;
+                            managedArray[i + 3] = 255;
                         }
-                        else
-                        {
-                            Marshal.WriteByte(dstPtr, i / bytesPerPixel * 4 + 3, 255); // A
-                        }
+                        Marshal.Copy(managedArray, 0, dstPtr, imageSize);
                     }
                 }
             }
@@ -198,68 +196,85 @@ namespace IPStreamApp
 
         private void InitializeAudioCapture()
         {
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+#if WINDOWS
+    // Windows: WasapiLoopbackCapture
+    _captureAudio = new WasapiLoopbackCapture();
+    _waveOut = new WaveOutEvent();
+    var waveProvider = new BufferedWaveProvider(_captureAudio.WaveFormat);
+    _waveOut.Init(waveProvider);
+
+    _captureAudio.DataAvailable += (s, e) =>
+    {
+        waveProvider.AddSamples(e.Buffer, 0, e.BytesRecorded);
+    };
+
+    _captureAudio.StartRecording();
+    _waveOut.Play();
+#else
+            // Linux: WaveInEvent (PortAudio/ALSA) + ManagedBass
+            if (!Bass.Init())
             {
-                _captureAudio = new WasapiLoopbackCapture();
-                _waveOut = new WaveOutEvent();
-                var waveProvider = new BufferedWaveProvider(_captureAudio.WaveFormat);
-                _waveOut.Init(waveProvider);
-
-                _captureAudio.DataAvailable += (s, e) =>
-                {
-                    waveProvider.AddSamples(e.Buffer, 0, e.BytesRecorded);
-                };
-
-                _captureAudio.StartRecording();
-                _waveOut.Play();
+                Console.WriteLine($"ќшибка инициализации ManagedBass: {Bass.LastError}");
+                return;
             }
-            else
+
+            _waveIn = new WaveInEvent();
+            _waveIn.DeviceNumber = -1; // ”стройство по умолчанию
+            _waveIn.WaveFormat = new NAudio.Wave.WaveFormat(44100, 16, 2); // 44.1 к√ц, 16 бит, стерео
+
+            var bufferedWaveProvider = new BufferedWaveProvider(_waveIn.WaveFormat);
+
+            _waveIn.DataAvailable += (s, e) =>
             {
-                _waveIn = new WaveInEvent();
-                _waveIn.DeviceNumber = -1; // ”стройство по умолчанию
-                _waveIn.WaveFormat = new WaveFormat(44100, 16, 2); // 44.1 к√ц, 16 бит, стерео
+                bufferedWaveProvider.AddSamples(e.Buffer, 0, e.BytesRecorded);
+            };
 
-                var bufferedWaveProvider = new BufferedWaveProvider(_waveIn.WaveFormat);
-
-                _waveIn.DataAvailable += (s, e) =>
+            _streamHandle = Bass.CreateStream(_waveIn.WaveFormat.SampleRate, _waveIn.WaveFormat.Channels, BassFlags.Default,
+                (handle, buffer, length, user) =>
                 {
-                    bufferedWaveProvider.AddSamples(e.Buffer, 0, e.BytesRecorded);
-                };
+                    byte[] tempBuffer = new byte[length];
+                    int bytesRead = bufferedWaveProvider.Read(tempBuffer, 0, length);
+                    Marshal.Copy(tempBuffer, 0, buffer, bytesRead);
+                    return bytesRead;
+                }, IntPtr.Zero);
 
-                _waveOut = new WaveOutEvent();
-                _waveOut.Init(bufferedWaveProvider);
-
-                _waveIn.StartRecording();
-                _waveOut.Play();
+            if (_streamHandle == 0)
+            {
+                Console.WriteLine($"ќшибка создани€ потока: {Bass.LastError}");
+                return;
             }
+
+            _waveIn.StartRecording();
+            Bass.ChannelPlay(_streamHandle);
+#endif
         }
 
         private void StopAudioCapture()
         {
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                _waveOut?.Stop();
-                _waveOut?.Dispose();
-                _waveOut = null;
+#if WINDOWS
+            _waveOut?.Stop();
+            _waveOut?.Dispose();
+            _waveOut = null;
 
-                _captureAudio?.StopRecording();
-                _captureAudio?.Dispose();
-                _captureAudio = null;
-            }
-            else
+            _captureAudio?.StopRecording();
+            _captureAudio?.Dispose();
+            _captureAudio = null;
+#else
+            if (_streamHandle != 0)
             {
-                _waveOut?.Stop();
-                _waveOut?.Dispose();
-                _waveOut = null;
-
-                _waveIn?.StopRecording();
-                _waveIn?.Dispose();
-                _waveIn = null;
+                Bass.ChannelStop(_streamHandle);
+                Bass.StreamFree(_streamHandle);
+                _streamHandle = 0;
             }
+            Bass.Free();
+
+            _waveIn?.StopRecording();
+            _waveIn?.Dispose();
+            _waveIn = null;
+#endif
         }
     }
 }
-
 
 
 
