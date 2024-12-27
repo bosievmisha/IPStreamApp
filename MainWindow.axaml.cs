@@ -180,49 +180,82 @@ namespace IPStreamApp
 
         private void StartAudioCapture(string url)
         {
-            // Запуск процесса FFmpeg для захвата аудиопотока
-            _ffmpegProcess = new Process();
-            _ffmpegProcess.StartInfo.FileName = "ffmpeg";
-            _ffmpegProcess.StartInfo.Arguments = $"-i {url} -f wav -acodec pcm_s16le pipe:1";
-            _ffmpegProcess.StartInfo.UseShellExecute = false;
-            _ffmpegProcess.StartInfo.RedirectStandardOutput = true;
-            _ffmpegProcess.StartInfo.CreateNoWindow = true;
-
-            // Инициализация Bass
-            if (!Bass.Init())
+            try
             {
-                Console.WriteLine($"Ошибка инициализации ManagedBass: {Bass.LastError}");
-                return;
-            }
+                // Запуск процесса FFmpeg для захвата аудиопотока
+                _ffmpegProcess = new Process();
+                _ffmpegProcess.StartInfo.FileName = "ffmpeg";
+                _ffmpegProcess.StartInfo.Arguments = $"-i {url} -f wav -acodec pcm_s16le pipe:1";
+                _ffmpegProcess.StartInfo.UseShellExecute = false;
+                _ffmpegProcess.StartInfo.RedirectStandardOutput = true;
+                _ffmpegProcess.StartInfo.CreateNoWindow = true;
 
-            // Создание аудиопотока для воспроизведения
-            _audioStreamHandle = Bass.CreateStream(44100, 2, BassFlags.Default, StreamProc, IntPtr.Zero);
-
-            if (_audioStreamHandle == 0)
-            {
-                Console.WriteLine($"Ошибка создания аудиопотока: {Bass.LastError}");
-                return;
-            }
-
-            // Обработка данных, полученных от FFmpeg
-            _ffmpegProcess.OutputDataReceived += (sender, args) =>
-            {
-                if (!string.IsNullOrEmpty(args.Data) && _audioStreamHandle != 0)
+                // Инициализация Bass
+                if (!Bass.Init())
                 {
-                    byte[] buffer = System.Text.Encoding.UTF8.GetBytes(args.Data);
-                    Bass.StreamPutData(_audioStreamHandle, buffer, buffer.Length);
+                    Console.WriteLine($"Ошибка инициализации ManagedBass: {Bass.LastError}");
+                    return;
                 }
-            };
 
-            _ffmpegProcess.Start();
-            _ffmpegProcess.BeginOutputReadLine();
-            Bass.ChannelPlay(_audioStreamHandle);
+                // Создание аудиопотока для воспроизведения
+                _audioStreamHandle = Bass.CreateStream(44100, 2, BassFlags.Default, StreamProc, IntPtr.Zero);
+
+                if (_audioStreamHandle == 0)
+                {
+                    Console.WriteLine($"Ошибка создания аудиопотока: {Bass.LastError}");
+                    return;
+                }
+
+                // Запуск процесса FFmpeg
+                _ffmpegProcess.Start();
+
+                // Чтение данных из выходного потока FFmpeg в отдельном потоке
+                Task.Run(() => ReadAudioStreamFromFFmpeg());
+
+                // Запуск воспроизведения
+                Bass.ChannelPlay(_audioStreamHandle);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Произошла ошибка при захвате аудио: {ex.Message}");
+                StopAudioCapture(); // Остановка захвата при возникновении ошибки
+            }
+        }
+
+        private async Task ReadAudioStreamFromFFmpeg()
+        {
+            try
+            {
+                byte[] buffer = new byte[4096]; // Буфер для чтения данных
+                int bytesRead;
+
+                while (_ffmpegProcess != null && !_ffmpegProcess.HasExited)
+                {
+                    bytesRead = await _ffmpegProcess.StandardOutput.BaseStream.ReadAsync(buffer, 0, buffer.Length);
+
+                    if (bytesRead > 0)
+                    {
+                        // Передача данных в Bass
+                        Bass.StreamPutData(_audioStreamHandle, buffer, bytesRead);
+                    }
+                    else
+                    {
+                        // Если данных нет, делаем небольшую паузу, чтобы не загружать процессор
+                        await Task.Delay(50);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка при чтении аудиопотока: {ex.Message}");
+                // Обработка ошибок при чтении потока
+            }
         }
 
         private int StreamProc(int handle, IntPtr buffer, int length, IntPtr user)
         {
             // Метод обработки аудиоданных (может оставаться пустым, если данные обрабатываются асинхронно)
-            return 0;
+            return length;
         }
 
         private void StopAudioCapture()
